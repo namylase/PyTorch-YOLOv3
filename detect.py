@@ -24,25 +24,37 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.ticker import NullLocator
 
+import tile_image
+import merge_image
+import section_image
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_folder", type=str, default="data/samples", help="path to dataset")
-    parser.add_argument("--model_def", type=str, default="config/yolov3.cfg", help="path to model definition file")
-    parser.add_argument("--weights_path", type=str, default="weights/yolov3.weights", help="path to weights file")
-    parser.add_argument("--class_path", type=str, default="data/coco.names", help="path to class label file")
+    parser.add_argument("--image_name", type=str, default="50.jpg", help="name of image in data folder")
+    # parser.add_argument("--image_folder", type=str, default="output/50", help="path to dataset")
+    parser.add_argument("--model_def", type=str, default="config/yolov3-custom.cfg", help="path to model definition file")
+    parser.add_argument("--weights_path", type=str, default="weights/yolov3_ckpt_198.pth", help="path to weights file")
+    parser.add_argument("--class_path", type=str, default="data/custom/classes.names", help="path to class label file")
     parser.add_argument("--conf_thres", type=float, default=0.8, help="object confidence threshold")
-    parser.add_argument("--nms_thres", type=float, default=0.4, help="iou thresshold for non-maximum suppression")
+    parser.add_argument("--nms_thres", type=float, default=0.03, help="iou thresshold for non-maximum suppression on detection")
+    parser.add_argument("--iou_thres", type=float, default=0.1, help="iou thresshold for merge image")
     parser.add_argument("--batch_size", type=int, default=1, help="size of the batches")
     parser.add_argument("--n_cpu", type=int, default=0, help="number of cpu threads to use during batch generation")
     parser.add_argument("--img_size", type=int, default=416, help="size of each image dimension")
     parser.add_argument("--checkpoint_model", type=str, help="path to checkpoint model")
+    parser.add_argument("--people_pixel_size", type=int, default=30, help="size of people pixel size")
+    parser.add_argument("--input_img_width", type=int, default=4000, help="size of each image dimension")
+    parser.add_argument("--input_img_height", type=int, default=3000, help="size of each image dimension")
+
     opt = parser.parse_args()
     print(opt)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    image_folder = 'output/'+opt.image_name.replace('.jpg','')
     os.makedirs("output", exist_ok=True)
 
+    tile_image.tile_image(opt.image_name, opt.people_pixel_size, (opt.input_img_width, opt.input_img_height), (opt.img_size, opt.img_size))
+    print('Image Tiling End\n')
     # Set up model
     model = Darknet(opt.model_def, img_size=opt.img_size).to(device)
 
@@ -51,12 +63,12 @@ if __name__ == "__main__":
         model.load_darknet_weights(opt.weights_path)
     else:
         # Load checkpoint weights
-        model.load_state_dict(torch.load(opt.weights_path))
+        model.load_state_dict(torch.load(opt.weights_path,map_location=device))
 
     model.eval()  # Set in evaluation mode
 
     dataloader = DataLoader(
-        ImageFolder(opt.image_folder, transform= \
+        ImageFolder(image_folder, transform= \
             transforms.Compose([DEFAULT_TRANSFORMS, Resize(opt.img_size)])),
         batch_size=opt.batch_size,
         shuffle=False,
@@ -92,10 +104,10 @@ if __name__ == "__main__":
         img_detections.extend(detections)
 
     # Bounding-box colors
-    cmap = plt.get_cmap("tab20b")
-    colors = [cmap(i) for i in np.linspace(0, 1, 20)]
+    # cmap = plt.get_cmap("tab20b")
+    # colors = [cmap(i) for i in np.linspace(0, 1, 20)]
 
-    print("\nSaving images:")
+    print("\nSaving txts:")
     # Iterate through images and save plot of detections
     for img_i, (path, detections) in enumerate(zip(imgs, img_detections)):
 
@@ -103,9 +115,11 @@ if __name__ == "__main__":
 
         # Create plot
         img = np.array(Image.open(path))
-        plt.figure()
-        fig, ax = plt.subplots(1)
-        ax.imshow(img)
+        # plt.figure()
+        # fig, ax = plt.subplots(1)
+        # ax.imshow(img)
+
+        box_loc_conf = []  ##
 
         # Draw bounding boxes and labels of detections
         if detections is not None:
@@ -113,11 +127,17 @@ if __name__ == "__main__":
             detections = rescale_boxes(detections, opt.img_size, img.shape[:2])
             unique_labels = detections[:, -1].cpu().unique()
             n_cls_preds = len(unique_labels)
-            bbox_colors = random.sample(colors, n_cls_preds)
+            # bbox_colors = random.sample(colors, n_cls_preds)
+
+
             for x1, y1, x2, y2, conf, cls_conf, cls_pred in detections:
 
-                print("\t+ Label: %s, Conf: %.5f" % (classes[int(cls_pred)], cls_conf.item()))
+                print("\t+ Label: %s, Conf: %.5f" % (classes[int(cls_pred)], conf.item())) ##
 
+                row=list(map(round,[y1.item(),x1.item(),y2.item(),x2.item(),conf.item()*10000]))
+                box_loc_conf.append(row)  ##
+
+                '''
                 box_w = x2 - x1
                 box_h = y2 - y1
 
@@ -127,6 +147,7 @@ if __name__ == "__main__":
                 # Add the bbox to the plot
                 ax.add_patch(bbox)
                 # Add label
+                
                 plt.text(
                     x1,
                     y1,
@@ -135,12 +156,20 @@ if __name__ == "__main__":
                     verticalalignment="top",
                     bbox={"color": color, "pad": 0},
                 )
+                '''
+
+        boxes_loc_conf = np.array(box_loc_conf)      ##
 
         # Save generated image with detections
-        plt.axis("off")
-        plt.gca().xaxis.set_major_locator(NullLocator())
-        plt.gca().yaxis.set_major_locator(NullLocator())
+        # plt.axis("off")
+        # plt.gca().xaxis.set_major_locator(NullLocator())
+        # plt.gca().yaxis.set_major_locator(NullLocator())
         filename = os.path.basename(path).split(".")[0]
-        output_path = os.path.join("output", f"{filename}.png")
-        plt.savefig(output_path, bbox_inches="tight", pad_inches=0.0)
-        plt.close()
+
+        # output_path = os.path.join(image_folder, f"{filename}.png")
+        np.savetxt(os.path.join(image_folder, f"{filename}.txt"), boxes_loc_conf, fmt='%i')      ##
+        # plt.savefig(output_path, bbox_inches="tight", pad_inches=0.0)
+        # plt.close()
+
+    merge_image.merge_image(opt.image_name, opt.people_pixel_size, (opt.input_img_width, opt.input_img_height), (opt.img_size, opt.img_size))
+    section_image.section_image(opt.image_name,opt.iou_thres, (opt.input_img_width, opt.input_img_height))  # 0206
